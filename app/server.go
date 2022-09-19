@@ -1,6 +1,7 @@
 package app
 
 import (
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/joho/godotenv"
+	"github.com/urfave/cli/v2"
 	"github.com/walknight/gotoko/database/seeders"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
@@ -37,14 +39,8 @@ type DBConfig struct {
 func (server *Server) Initialize(appConfig AppConfig, dbConfig DBConfig) {
 	//Welcome message
 	fmt.Println("Welcome to " + appConfig.AppName)
-	//setup error var
-
-	//initialize Database
-	server.InitializeDB(dbConfig)
 	//run initilize router
 	server.InitializeRoutes()
-	//seeder
-	seeders.DBSeed(server.DB)
 }
 
 func (server *Server) Run(addr string) {
@@ -70,15 +66,50 @@ func (server *Server) InitializeDB(dbConfig DBConfig) {
 	} else {
 		fmt.Printf("We are connected to the %s database\n", dbConfig.DBDriver)
 	}
+}
 
+func (server *Server) dbMigrate() {
 	for _, model := range RegisterModels() {
-		err = server.DB.Debug().AutoMigrate(model.Model)
+		err := server.DB.Debug().AutoMigrate(model.Model)
 		if err != nil {
 			log.Fatal(err)
 		}
 	}
 
 	fmt.Println("Data migrated successfully.")
+
+}
+
+func (server *Server) initCommands(config AppConfig, dbConfig DBConfig) {
+	//initialize db connection
+	server.InitializeDB(dbConfig)
+	//define command
+	cmdApp := &cli.App{
+		Commands: []*cli.Command{
+			{
+				Name: "db:migrate",
+				Action: func(ctx *cli.Context) error {
+					server.dbMigrate()
+					return nil
+				},
+			},
+			{
+				Name: "db:seed",
+				Action: func(ctx *cli.Context) error {
+					err := seeders.DBSeed(server.DB)
+					if err != nil {
+						log.Fatal(err)
+					}
+					return nil
+				},
+			},
+		},
+	}
+	//run command
+	err := cmdApp.Run(os.Args)
+	if err != nil {
+		log.Fatal(err)
+	}
 }
 
 // fungsi untuk get env dan set default bila param env tidak ada
@@ -99,7 +130,7 @@ func Run() {
 		log.Fatalf("Error when loading .env file")
 		return
 	}
-
+	//get env value
 	appConfig.AppName = getEnv("APP_NAME", "GoToko")
 	appConfig.AppEnv = getEnv("APP_ENV", "development")
 	appConfig.AppPort = getEnv("APP_PORT", "9000")
@@ -111,6 +142,12 @@ func Run() {
 	dbConfig.DBUser = getEnv("DB_USER", "root")
 	dbConfig.DBPassword = getEnv("DB_PASSWORD", "")
 
-	server.Initialize(appConfig, dbConfig)
-	server.Run(":" + appConfig.AppPort)
+	flag.Parse()
+	arg := flag.Arg(0)
+	if arg != "" {
+		server.initCommands(appConfig, dbConfig)
+	} else {
+		server.Initialize(appConfig, dbConfig)
+		server.Run(":" + appConfig.AppPort)
+	}
 }
